@@ -501,7 +501,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("세션이 만료되었습니다. /create로 다시 시작해주세요.")
             return
 
-        gpu_index = int(data[len("crgpu_"):])
+        try:
+            gpu_index = int(data[len("crgpu_"):])
+        except ValueError:
+            await query.edit_message_text("잘못된 GPU 선택입니다.")
+            return
         if gpu_index < 0 or gpu_index >= len(PREFERRED_GPUS):
             await query.edit_message_text("잘못된 GPU 선택입니다.")
             return
@@ -575,7 +579,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if state.get("data_center_id"):
                 config["dataCenterIds"] = [state["data_center_id"]]
         else:
-            config["volumeInGb"] = 0
+            config["volumeInGb"] = 20
 
         try:
             result = await create_pod_api(config)
@@ -611,7 +615,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("terminate_"):
-        pod_id = data.replace("terminate_", "")
+        pod_id = data[len("terminate_"):]
 
         # pod_id 형식 검증 (영숫자와 하이픈만 허용)
         if not pod_id or not all(c.isalnum() or c == '-' for c in pod_id):
@@ -635,7 +639,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     elif data.startswith("stop_"):
-        pod_id = data.replace("stop_", "")
+        pod_id = data[len("stop_"):]
 
         # pod_id 형식 검증
         if not pod_id or not all(c.isalnum() or c == '-' for c in pod_id):
