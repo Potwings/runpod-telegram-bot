@@ -10,6 +10,7 @@ import asyncio
 import logging
 from datetime import datetime
 
+import httpx
 import runpod
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -44,6 +45,22 @@ CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "60"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ngrok URL (예: https://xxxx.ngrok.io)
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8443"))
 
+# RunPod REST API 설정
+RUNPOD_REST_BASE = "https://rest.runpod.io/v1"
+
+# GPU 목록 (PREFERRED_GPUS 환경 변수로 오버라이드 가능)
+DEFAULT_GPUS = [
+    "NVIDIA RTX A4500",
+    "NVIDIA A100 80GB PCIe",
+    "NVIDIA A100-SXM4-80GB",
+]
+_preferred_gpus_env = os.getenv("PREFERRED_GPUS", "")
+PREFERRED_GPUS = (
+    [g.strip() for g in _preferred_gpus_env.split(",") if g.strip()]
+    if _preferred_gpus_env
+    else DEFAULT_GPUS
+)
+
 # 허용된 사용자 ID 목록 (쉼표로 구분, 예: "123456,789012")
 ALLOWED_USER_IDS = os.getenv("ALLOWED_USER_IDS", "")
 
@@ -73,6 +90,56 @@ def is_authorized(update: Update) -> bool:
         return False
 
     return True
+
+
+# --- RunPod REST API 헬퍼 ---
+async def runpod_rest_get(endpoint: str) -> dict:
+    """RunPod REST API GET 호출"""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{RUNPOD_REST_BASE}{endpoint}",
+            headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def runpod_rest_post(endpoint: str, data: dict) -> dict:
+    """RunPod REST API POST 호출"""
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{RUNPOD_REST_BASE}{endpoint}",
+            headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+            json=data,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def fetch_templates() -> list:
+    """등록된 템플릿 목록 조회"""
+    data = await runpod_rest_get("/templates")
+    return data if isinstance(data, list) else []
+
+
+async def fetch_network_volumes() -> list:
+    """네트워크 볼륨 목록 조회"""
+    data = await runpod_rest_get("/networkvolumes")
+    return data if isinstance(data, list) else []
+
+
+async def create_pod_api(config: dict) -> dict:
+    """Pod 생성 API 호출"""
+    return await runpod_rest_post("/pods", config)
+
+
+def generate_pod_name(template_name: str) -> str:
+    """템플릿명+타임스탬프 기반 자동 이름 생성"""
+    ts = datetime.now().strftime("%m%d-%H%M")
+    safe_name = template_name[:20].replace(" ", "-")
+    return f"{safe_name}-{ts}"
 
 
 def format_uptime(seconds: int) -> str:
@@ -115,6 +182,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "사용 가능한 명령어:\n"
         "/status - 현재 실행 중인 pod 확인\n"
         "/pods - 모든 pod 목록 확인\n"
+        "/create - 새 pod 생성\n"
         "/terminate - pod 종료 메뉴 (완전 삭제)\n"
         "/stop - pod 정지 메뉴 (스토리지 유지)\n"
         "/help - 도움말"
@@ -132,6 +200,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "RunPod Monitor Bot 도움말\n\n"
         "/status - 현재 실행 중인 pod 상태 확인\n"
         "/pods - 모든 pod 목록 조회\n"
+        "/create - 새 pod 생성 (템플릿/볼륨/GPU 선택)\n"
         "/terminate - pod 완전 삭제 (비용 청구 중단)\n"
         "/stop - pod 정지 (스토리지 유지)\n\n"
         f"자동 체크 주기: {CHECK_INTERVAL_MINUTES}분"
@@ -263,6 +332,46 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
 
 
+async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/create - Pod 생성 시작 (Step 1: 템플릿 선택)"""
+    if not is_authorized(update):
+        logger.warning(f"권한 없는 접근 시도: user_id={update.effective_user.id}")
+        await update.message.reply_text("권한이 없습니다.")
+        return
+
+    try:
+        templates = await fetch_templates()
+
+        if not templates:
+            await update.message.reply_text("등록된 템플릿이 없습니다.")
+            return
+
+        keyboard = []
+        for tpl in templates:
+            tpl_id = tpl.get("id", "")
+            tpl_name = tpl.get("name", tpl_id[:8])
+            keyboard.append(
+                [InlineKeyboardButton(tpl_name, callback_data=f"crtpl_{tpl_id}")]
+            )
+        keyboard.append([InlineKeyboardButton("취소", callback_data="cancel")])
+
+        # 상태 초기화 (템플릿 데이터 캐시)
+        context.user_data["create_pod"] = {
+            "_templates": {t.get("id"): t for t in templates},
+        }
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Pod 생성 - 템플릿을 선택하세요:",
+            reply_markup=reply_markup,
+        )
+    except Exception as e:
+        logger.error(f"Create 메뉴 오류: {e}")
+        await update.message.reply_text(
+            "템플릿 목록을 가져오는 데 실패했습니다. 잠시 후 다시 시도해주세요."
+        )
+
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """인라인 버튼 콜백 처리"""
     query = update.callback_query
@@ -277,7 +386,228 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "cancel":
+        context.user_data.pop("create_pod", None)
         await query.edit_message_text("작업이 취소되었습니다.")
+        return
+
+    # --- Pod 생성 플로우 콜백 ---
+    if data.startswith("crtpl_"):
+        # Step 2: 템플릿 선택 → 네트워크 볼륨 선택
+        template_id = data[len("crtpl_"):]
+        try:
+            state = context.user_data.get("create_pod", {})
+            cached_templates = state.get("_templates", {})
+            tpl = cached_templates.get(template_id)
+            if not tpl:
+                await query.edit_message_text("선택한 템플릿을 찾을 수 없습니다.")
+                return
+
+            state.update({
+                "template_id": template_id,
+                "template_name": tpl.get("name", template_id[:8]),
+                "image_name": tpl.get("imageName", ""),
+                "docker_args": tpl.get("dockerArgs", ""),
+                "container_disk": tpl.get("containerDiskInGb", 50),
+                "ports": tpl.get("ports", "8888/http,22/tcp"),
+            })
+            # 템플릿 캐시 정리
+            state.pop("_templates", None)
+
+            volumes = await fetch_network_volumes()
+            if volumes:
+                # 볼륨 데이터 캐시
+                state["_volumes"] = {v.get("id"): v for v in volumes}
+                keyboard = []
+                for vol in volumes:
+                    vol_id = vol.get("id", "")
+                    vol_name = vol.get("name", vol_id[:8])
+                    vol_size = vol.get("size", 0)
+                    dc = vol.get("dataCenterId", "?")
+                    keyboard.append(
+                        [InlineKeyboardButton(
+                            f"{vol_name} ({vol_size}GB, {dc})",
+                            callback_data=f"crvol_{vol_id}",
+                        )]
+                    )
+                keyboard.append(
+                    [InlineKeyboardButton("볼륨 없이 생성", callback_data="crvol_none")]
+                )
+                keyboard.append([InlineKeyboardButton("취소", callback_data="cancel")])
+                await query.edit_message_text(
+                    f"템플릿: {tpl.get('name', template_id[:8])}\n\n"
+                    "네트워크 볼륨을 선택하세요 (선택사항):",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+            else:
+                # 볼륨이 없으면 바로 GPU 선택으로
+                context.user_data["create_pod"]["volume_id"] = None
+                keyboard = []
+                for i, gpu in enumerate(PREFERRED_GPUS):
+                    keyboard.append(
+                        [InlineKeyboardButton(gpu, callback_data=f"crgpu_{i}")]
+                    )
+                keyboard.append([InlineKeyboardButton("취소", callback_data="cancel")])
+                await query.edit_message_text(
+                    f"템플릿: {tpl.get('name', template_id[:8])}\n"
+                    "볼륨: 없음\n\n"
+                    "GPU를 선택하세요:",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+        except Exception as e:
+            logger.error(f"템플릿 선택 처리 오류: {e}")
+            await query.edit_message_text("오류가 발생했습니다. 다시 시도해주세요.")
+        return
+
+    if data.startswith("crvol_"):
+        # Step 3: 볼륨 선택 → GPU 선택
+        state = context.user_data.get("create_pod")
+        if not state:
+            await query.edit_message_text("세션이 만료되었습니다. /create로 다시 시작해주세요.")
+            return
+
+        vol_part = data[len("crvol_"):]
+        if vol_part == "none":
+            state["volume_id"] = None
+            vol_display = "없음"
+        else:
+            state["volume_id"] = vol_part
+            cached_volumes = state.get("_volumes", {})
+            vol = cached_volumes.get(vol_part)
+            vol_display = vol.get("name", vol_part[:8]) if vol else vol_part[:8]
+            if vol and vol.get("dataCenterId"):
+                state["data_center_id"] = vol["dataCenterId"]
+
+        # 볼륨 캐시 정리
+        state.pop("_volumes", None)
+
+        keyboard = []
+        for i, gpu in enumerate(PREFERRED_GPUS):
+            keyboard.append(
+                [InlineKeyboardButton(gpu, callback_data=f"crgpu_{i}")]
+            )
+        keyboard.append([InlineKeyboardButton("취소", callback_data="cancel")])
+        await query.edit_message_text(
+            f"템플릿: {state['template_name']}\n"
+            f"볼륨: {vol_display}\n\n"
+            "GPU를 선택하세요:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    if data.startswith("crgpu_"):
+        # Step 4: GPU 선택 → 확인 화면
+        state = context.user_data.get("create_pod")
+        if not state:
+            await query.edit_message_text("세션이 만료되었습니다. /create로 다시 시작해주세요.")
+            return
+
+        gpu_index = int(data[len("crgpu_"):])
+        if gpu_index < 0 or gpu_index >= len(PREFERRED_GPUS):
+            await query.edit_message_text("잘못된 GPU 선택입니다.")
+            return
+
+        state["gpu_type"] = PREFERRED_GPUS[gpu_index]
+
+        pod_name = generate_pod_name(state["template_name"])
+        state["pod_name"] = pod_name
+
+        vol_display = "없음"
+        if state.get("volume_id"):
+            vol_display = state["volume_id"][:12] + "..."
+
+        summary = (
+            f"Pod 생성 확인\n\n"
+            f"이름: {pod_name}\n"
+            f"템플릿: {state['template_name']}\n"
+            f"GPU: {state['gpu_type']}\n"
+            f"네트워크 볼륨: {vol_display}\n"
+            f"컨테이너 디스크: {state.get('container_disk', 50)}GB\n"
+            f"포트: {state.get('ports', '8888/http,22/tcp')}\n\n"
+            "생성하시겠습니까?"
+        )
+
+        keyboard = [
+            [InlineKeyboardButton("생성", callback_data="crconfirm")],
+            [InlineKeyboardButton("취소", callback_data="cancel")],
+        ]
+        await query.edit_message_text(
+            summary,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    if data == "crconfirm":
+        # Step 5: Pod 생성 실행
+        state = context.user_data.pop("create_pod", None)
+        if not state:
+            await query.edit_message_text("세션이 만료되었습니다. /create로 다시 시작해주세요.")
+            return
+
+        await query.edit_message_text(
+            f"Pod 생성 중... ({state['gpu_type']})"
+        )
+
+        # ports를 배열로 변환 (API는 배열 형식 요구)
+        ports_raw = state.get("ports", "8888/http,22/tcp")
+        if isinstance(ports_raw, str):
+            ports_list = [p.strip() for p in ports_raw.split(",") if p.strip()]
+        else:
+            ports_list = ports_raw
+
+        config = {
+            "name": state["pod_name"],
+            "imageName": state.get("image_name", ""),
+            "gpuTypeIds": [state["gpu_type"]],
+            "gpuCount": 1,
+            "containerDiskInGb": state.get("container_disk", 50),
+            "ports": ports_list,
+            "templateId": state["template_id"],
+        }
+        if state.get("docker_args"):
+            docker_args = state["docker_args"]
+            if isinstance(docker_args, str):
+                config["dockerStartCmd"] = docker_args.split()
+            elif isinstance(docker_args, list):
+                config["dockerStartCmd"] = docker_args
+        if state.get("volume_id"):
+            config["networkVolumeId"] = state["volume_id"]
+            config["volumeInGb"] = 0
+            if state.get("data_center_id"):
+                config["dataCenterIds"] = [state["data_center_id"]]
+        else:
+            config["volumeInGb"] = 0
+
+        try:
+            result = await create_pod_api(config)
+            pod_id = result.get("id", "N/A")
+            await query.edit_message_text(
+                f"Pod이 성공적으로 생성되었습니다!\n\n"
+                f"ID: `{pod_id}`\n"
+                f"이름: {state['pod_name']}\n"
+                f"GPU: {state['gpu_type']}\n\n"
+                "/status 명령으로 상태를 확인하세요.",
+                parse_mode="Markdown",
+            )
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Pod 생성 API 오류: {e.response.status_code} - {e.response.text}")
+            error_detail = e.response.text[:200]
+            try:
+                err_body = e.response.json()
+                err_field = err_body.get("error", "")
+                if isinstance(err_field, dict):
+                    error_detail = err_field.get("message", error_detail)
+                elif isinstance(err_field, str) and err_field:
+                    error_detail = err_field
+            except Exception:
+                pass
+            await query.edit_message_text(
+                f"Pod 생성에 실패했습니다.\n\n오류: {error_detail}"
+            )
+        except Exception as e:
+            logger.error(f"Pod 생성 실패: {e}")
+            await query.edit_message_text(
+                "Pod 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
         return
 
     if data.startswith("terminate_"):
@@ -405,6 +735,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("pods", pods_command))
+    app.add_handler(CommandHandler("create", create_command))
     app.add_handler(CommandHandler("terminate", terminate_command))
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CallbackQueryHandler(button_callback))
