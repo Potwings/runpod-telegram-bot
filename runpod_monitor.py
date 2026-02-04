@@ -142,29 +142,18 @@ def generate_pod_name(template_name: str) -> str:
     return f"{safe_name}-{ts}"
 
 
-def format_uptime(seconds: int) -> str:
-    """업타임을 읽기 쉬운 형식으로 변환"""
-    if not seconds:
-        return "N/A"
-    hours, remainder = divmod(seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    return f"{int(hours)}h {int(minutes)}m {int(secs)}s"
-
-
 def format_pod_info(pod: dict) -> str:
     """pod 정보를 텍스트로 포맷"""
-    runtime = pod.get("runtime") or {}
-    uptime = runtime.get("uptimeInSeconds", 0)
-    gpu_type = pod.get("gpuTypeId", "N/A")
+    machine = pod.get("machine") or {}
+    gpu_type = machine.get("gpuDisplayName", "N/A")
     cost = pod.get("costPerHr", 0)
     status = pod.get("desiredStatus", "N/A")
 
     return (
-        f"  - ID: `{pod['id']}`\n"
+        f"  - ID: {pod['id']}\n"
         f"  - 이름: {pod.get('name', 'N/A')}\n"
         f"  - GPU: {gpu_type}\n"
         f"  - 상태: {status}\n"
-        f"  - 업타임: {format_uptime(uptime)}\n"
         f"  - 시간당 비용: ${cost:.4f}"
     )
 
@@ -226,7 +215,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pod in running_pods:
             message += format_pod_info(pod) + "\n\n"
 
-        await update.message.reply_text(message, parse_mode="Markdown")
+        await update.message.reply_text(message)
     except Exception as e:
         logger.error(f"Status 조회 실패: {e}")
         await update.message.reply_text("오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
@@ -250,7 +239,7 @@ async def pods_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for pod in pods:
             message += format_pod_info(pod) + "\n\n"
 
-        await update.message.reply_text(message, parse_mode="Markdown")
+        await update.message.reply_text(message)
     except Exception as e:
         logger.error(f"Pods 조회 실패: {e}")
         await update.message.reply_text("오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
@@ -669,7 +658,6 @@ async def send_alert(app: Application, message: str):
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text=message,
-            parse_mode="Markdown",
         )
     except Exception as e:
         logger.error(f"알림 전송 실패: {e}")
