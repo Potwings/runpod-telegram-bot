@@ -616,19 +616,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             pods = runpod.get_pods()
             pod_info = next((p for p in pods if p.get("id") == pod_id), None)
-            if pod_info:
-                pod_name = pod_info.get("name", pod_id[:8])
-                status = pod_info.get("desiredStatus", "N/A")
-                machine = pod_info.get("machine") or {}
-                gpu_type = machine.get("gpuDisplayName", "N/A")
-            else:
-                pod_name = pod_id[:8]
-                status = "N/A"
-                gpu_type = "N/A"
-        except Exception:
-            pod_name = pod_id[:8]
-            status = "N/A"
-            gpu_type = "N/A"
+            if not pod_info:
+                logger.warning(f"Pod을 찾을 수 없음: {pod_id}")
+                await query.edit_message_text(
+                    f"Pod `{pod_id}`을(를) 찾을 수 없습니다.\n"
+                    "이미 삭제되었거나 존재하지 않는 Pod입니다.",
+                    parse_mode="Markdown",
+                )
+                return
+            pod_name = pod_info.get("name", pod_id[:8])
+            status = pod_info.get("desiredStatus", "N/A")
+            machine = pod_info.get("machine") or {}
+            gpu_type = machine.get("gpuDisplayName", "N/A")
+        except Exception as e:
+            logger.error(f"Pod 정보 조회 실패 (pod_id={pod_id}): {e}")
+            await query.edit_message_text(
+                "Pod 정보를 가져오는 데 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
 
         keyboard = [
             [
@@ -661,19 +666,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             pods = runpod.get_pods()
             pod_info = next((p for p in pods if p.get("id") == pod_id), None)
-            if pod_info:
-                pod_name = pod_info.get("name", pod_id[:8])
-                status = pod_info.get("desiredStatus", pod_info.get("status", "N/A"))
-                machine = pod_info.get("machine") or {}
-                gpu_type = machine.get("gpuDisplayName", "N/A")
-            else:
-                pod_name = pod_id[:8]
-                status = "N/A"
-                gpu_type = "N/A"
-        except Exception:
-            pod_name = pod_id[:8]
-            status = "N/A"
-            gpu_type = "N/A"
+            if not pod_info:
+                logger.warning(f"Pod을 찾을 수 없음: {pod_id}")
+                await query.edit_message_text(
+                    f"Pod `{pod_id}`을(를) 찾을 수 없습니다.\n"
+                    "이미 삭제되었거나 존재하지 않는 Pod입니다.",
+                    parse_mode="Markdown",
+                )
+                return
+            pod_name = pod_info.get("name", pod_id[:8])
+            status = pod_info.get("desiredStatus", pod_info.get("status", "N/A"))
+            machine = pod_info.get("machine") or {}
+            gpu_type = machine.get("gpuDisplayName", "N/A")
+        except Exception as e:
+            logger.error(f"Pod 정보 조회 실패 (pod_id={pod_id}): {e}")
+            await query.edit_message_text(
+                "Pod 정보를 가져오는 데 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
 
         keyboard = [
             [
