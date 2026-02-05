@@ -619,9 +619,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not pod_info:
                 logger.warning(f"Pod을 찾을 수 없음: {pod_id}")
                 await query.edit_message_text(
-                    f"Pod `{pod_id}`을(를) 찾을 수 없습니다.\n"
-                    "이미 삭제되었거나 존재하지 않는 Pod입니다.",
-                    parse_mode="Markdown",
+                    f"Pod {pod_id}을(를) 찾을 수 없습니다.\n"
+                    "이미 삭제되었거나 존재하지 않는 Pod입니다."
                 )
                 return
             pod_name = pod_info.get("name", pod_id[:8])
@@ -644,11 +643,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"정말로 이 Pod을 종료(삭제)하시겠습니까?\n\n"
             f"이름: {pod_name}\n"
-            f"ID: `{pod_id}`\n"
+            f"ID: {pod_id}\n"
             f"상태: {status}\n"
             f"GPU: {gpu_type}\n\n"
             "⚠️ 이 작업은 되돌릴 수 없습니다.",
-            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
@@ -669,9 +667,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not pod_info:
                 logger.warning(f"Pod을 찾을 수 없음: {pod_id}")
                 await query.edit_message_text(
-                    f"Pod `{pod_id}`을(를) 찾을 수 없습니다.\n"
-                    "이미 삭제되었거나 존재하지 않는 Pod입니다.",
-                    parse_mode="Markdown",
+                    f"Pod {pod_id}을(를) 찾을 수 없습니다.\n"
+                    "이미 삭제되었거나 존재하지 않는 Pod입니다."
                 )
                 return
             pod_name = pod_info.get("name", pod_id[:8])
@@ -694,11 +691,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"정말로 이 Pod을 정지하시겠습니까?\n\n"
             f"이름: {pod_name}\n"
-            f"ID: `{pod_id}`\n"
+            f"ID: {pod_id}\n"
             f"상태: {status}\n"
             f"GPU: {gpu_type}\n\n"
             "스토리지는 유지됩니다.",
-            parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
@@ -713,19 +709,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("잘못된 요청입니다.")
             return
 
-        await query.edit_message_text(f"Pod `{pod_id}` 종료 중...", parse_mode="Markdown")
+        await query.edit_message_text(f"Pod {pod_id} 종료 중...")
 
         try:
             runpod.terminate_pod(pod_id)
             await query.edit_message_text(
-                f"Pod `{pod_id}` 가 성공적으로 종료되었습니다.",
-                parse_mode="Markdown",
+                f"Pod {pod_id}가 성공적으로 종료되었습니다."
             )
         except Exception as e:
             logger.error(f"Pod terminate 실패: {e}")
             await query.edit_message_text(
-                "Pod 종료에 실패했습니다. 잠시 후 다시 시도해주세요.",
-                parse_mode="Markdown",
+                "Pod 종료에 실패했습니다. 잠시 후 다시 시도해주세요."
             )
         return
 
@@ -738,19 +732,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("잘못된 요청입니다.")
             return
 
-        await query.edit_message_text(f"Pod `{pod_id}` 정지 중...", parse_mode="Markdown")
+        await query.edit_message_text(f"Pod {pod_id} 정지 중...")
 
         try:
             runpod.stop_pod(pod_id)
             await query.edit_message_text(
-                f"Pod `{pod_id}` 가 성공적으로 정지되었습니다.",
-                parse_mode="Markdown",
+                f"Pod {pod_id}가 성공적으로 정지되었습니다."
             )
         except Exception as e:
             logger.error(f"Pod stop 실패: {e}")
             await query.edit_message_text(
-                "Pod 정지에 실패했습니다. 잠시 후 다시 시도해주세요.",
-                parse_mode="Markdown",
+                "Pod 정지에 실패했습니다. 잠시 후 다시 시도해주세요."
             )
         return
 
