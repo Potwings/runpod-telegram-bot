@@ -612,20 +612,44 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("잘못된 요청입니다.")
             return
 
-        await query.edit_message_text(f"Pod `{pod_id}` 종료 중...", parse_mode="Markdown")
-
+        # Pod 정보 조회하여 확인 메시지 표시
         try:
-            runpod.terminate_pod(pod_id)
-            await query.edit_message_text(
-                f"Pod `{pod_id}` 가 성공적으로 종료되었습니다.",
-                parse_mode="Markdown",
-            )
+            pods = runpod.get_pods()
+            pod_info = next((p for p in pods if p.get("id") == pod_id), None)
+            if not pod_info:
+                logger.warning(f"Pod을 찾을 수 없음: {pod_id}")
+                await query.edit_message_text(
+                    f"Pod {pod_id}을(를) 찾을 수 없습니다.\n"
+                    "이미 삭제되었거나 존재하지 않는 Pod입니다."
+                )
+                return
+            pod_name = pod_info.get("name", pod_id[:8])
+            status = pod_info.get("desiredStatus", "N/A")
+            machine = pod_info.get("machine") or {}
+            gpu_type = machine.get("gpuDisplayName", "N/A")
         except Exception as e:
-            logger.error(f"Pod terminate 실패: {e}")
+            logger.error(f"Pod 정보 조회 실패 (pod_id={pod_id}): {e}")
             await query.edit_message_text(
-                "Pod 종료에 실패했습니다. 잠시 후 다시 시도해주세요.",
-                parse_mode="Markdown",
+                "Pod 정보를 가져오는 데 실패했습니다. 잠시 후 다시 시도해주세요."
             )
+            return
+
+        keyboard = [
+            [
+                InlineKeyboardButton("예, 종료합니다", callback_data=f"confirm_terminate_{pod_id}"),
+                InlineKeyboardButton("취소", callback_data="cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"정말로 이 Pod을 종료(삭제)하시겠습니까?\n\n"
+            f"이름: {pod_name}\n"
+            f"ID: {pod_id}\n"
+            f"상태: {status}\n"
+            f"GPU: {gpu_type}\n\n"
+            "⚠️ 이 작업은 되돌릴 수 없습니다.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
 
     elif data.startswith("stop_"):
         pod_id = data[len("stop_"):]
@@ -636,20 +660,91 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("잘못된 요청입니다.")
             return
 
-        await query.edit_message_text(f"Pod `{pod_id}` 정지 중...", parse_mode="Markdown")
+        # Pod 정보 조회하여 확인 메시지 표시
+        try:
+            pods = runpod.get_pods()
+            pod_info = next((p for p in pods if p.get("id") == pod_id), None)
+            if not pod_info:
+                logger.warning(f"Pod을 찾을 수 없음: {pod_id}")
+                await query.edit_message_text(
+                    f"Pod {pod_id}을(를) 찾을 수 없습니다.\n"
+                    "이미 삭제되었거나 존재하지 않는 Pod입니다."
+                )
+                return
+            pod_name = pod_info.get("name", pod_id[:8])
+            status = pod_info.get("desiredStatus", pod_info.get("status", "N/A"))
+            machine = pod_info.get("machine") or {}
+            gpu_type = machine.get("gpuDisplayName", "N/A")
+        except Exception as e:
+            logger.error(f"Pod 정보 조회 실패 (pod_id={pod_id}): {e}")
+            await query.edit_message_text(
+                "Pod 정보를 가져오는 데 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
+            return
+
+        keyboard = [
+            [
+                InlineKeyboardButton("예, 정지합니다", callback_data=f"confirm_stop_{pod_id}"),
+                InlineKeyboardButton("취소", callback_data="cancel"),
+            ]
+        ]
+        await query.edit_message_text(
+            f"정말로 이 Pod을 정지하시겠습니까?\n\n"
+            f"이름: {pod_name}\n"
+            f"ID: {pod_id}\n"
+            f"상태: {status}\n"
+            f"GPU: {gpu_type}\n\n"
+            "스토리지는 유지됩니다.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    # --- 확인 후 실제 실행 콜백 ---
+    if data.startswith("confirm_terminate_"):
+        pod_id = data[len("confirm_terminate_"):]
+
+        # pod_id 형식 검증
+        if not pod_id or not all(c.isalnum() or c == '-' for c in pod_id):
+            logger.warning(f"잘못된 pod_id 형식: {pod_id}")
+            await query.edit_message_text("잘못된 요청입니다.")
+            return
+
+        await query.edit_message_text(f"Pod {pod_id} 종료 중...")
+
+        try:
+            runpod.terminate_pod(pod_id)
+            await query.edit_message_text(
+                f"Pod {pod_id}가 성공적으로 종료되었습니다."
+            )
+        except Exception as e:
+            logger.error(f"Pod terminate 실패: {e}")
+            await query.edit_message_text(
+                "Pod 종료에 실패했습니다. 잠시 후 다시 시도해주세요."
+            )
+        return
+
+    elif data.startswith("confirm_stop_"):
+        pod_id = data[len("confirm_stop_"):]
+
+        # pod_id 형식 검증
+        if not pod_id or not all(c.isalnum() or c == '-' for c in pod_id):
+            logger.warning(f"잘못된 pod_id 형식: {pod_id}")
+            await query.edit_message_text("잘못된 요청입니다.")
+            return
+
+        await query.edit_message_text(f"Pod {pod_id} 정지 중...")
 
         try:
             runpod.stop_pod(pod_id)
             await query.edit_message_text(
-                f"Pod `{pod_id}` 가 성공적으로 정지되었습니다.",
-                parse_mode="Markdown",
+                f"Pod {pod_id}가 성공적으로 정지되었습니다."
             )
         except Exception as e:
             logger.error(f"Pod stop 실패: {e}")
             await query.edit_message_text(
-                "Pod 정지에 실패했습니다. 잠시 후 다시 시도해주세요.",
-                parse_mode="Markdown",
+                "Pod 정지에 실패했습니다. 잠시 후 다시 시도해주세요."
             )
+        return
 
 
 async def send_alert(app: Application, message: str):
