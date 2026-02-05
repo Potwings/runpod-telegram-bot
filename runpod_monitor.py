@@ -663,13 +663,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pod_info = next((p for p in pods if p.get("id") == pod_id), None)
             if pod_info:
                 pod_name = pod_info.get("name", pod_id[:8])
+                status = pod_info.get("desiredStatus", pod_info.get("status", "N/A"))
                 machine = pod_info.get("machine") or {}
                 gpu_type = machine.get("gpuDisplayName", "N/A")
             else:
                 pod_name = pod_id[:8]
+                status = "N/A"
                 gpu_type = "N/A"
         except Exception:
             pod_name = pod_id[:8]
+            status = "N/A"
             gpu_type = "N/A"
 
         keyboard = [
@@ -682,6 +685,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"정말로 이 Pod을 정지하시겠습니까?\n\n"
             f"이름: {pod_name}\n"
             f"ID: `{pod_id}`\n"
+            f"상태: {status}\n"
             f"GPU: {gpu_type}\n\n"
             "스토리지는 유지됩니다.",
             parse_mode="Markdown",
