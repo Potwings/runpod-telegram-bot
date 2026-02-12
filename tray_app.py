@@ -6,6 +6,9 @@ RunPod Monitor - Windows System Tray Application
 - 트레이 메뉴: 시작/중지/재시작/종료
 """
 
+from __future__ import annotations
+
+import importlib
 import os
 import sys
 import subprocess
@@ -14,8 +17,8 @@ import tkinter as tk
 import time
 from datetime import datetime
 
-import pystray
-from PIL import Image, ImageDraw, ImageFont
+pystray = None
+Image = ImageDraw = ImageFont = None
 
 
 # 현재 스크립트 디렉토리 기준으로 경로 설정
@@ -211,9 +214,14 @@ class LogWindow:
             pass
 
     def _refresh_status(self):
-        """상태 표시 갱신"""
-        running = self.app.running
-        if running:
+        """상태 표시 갱신 (프로세스 실제 상태와 동기화)"""
+        proc = self.app.process
+        actually_running = proc is not None and proc.poll() is None
+        if self.app.running != actually_running:
+            self.app.running = actually_running
+            self.app._update_icon()
+
+        if actually_running:
             self.status_dot.config(fg="#4caf50")
             self.status_label.config(text="  실행 중")
         else:
@@ -292,11 +300,10 @@ class TrayApp:
 
         # 파이프 → UTF-8 로그 파일 변환 스레드
         threading.Thread(target=self._pipe_to_log, daemon=True).start()
-        threading.Thread(target=self._watch_process, daemon=True).start()
+        threading.Thread(target=self._watch_process, args=(self.process,), daemon=True).start()
 
-    def _pipe_to_log(self):
+    def _pipe_to_log(self, proc: subprocess.Popen):
         """서브프로세스 stdout(바이트)을 읽어서 UTF-8로 로그 파일에 기록"""
-        proc = self.process
         if not proc or not proc.stdout:
             return
         with open(LOG_FILE, "a", encoding="utf-8", errors="replace", newline="") as log_f:
@@ -331,15 +338,17 @@ class TrayApp:
         time.sleep(1)
         self.start_bot()
 
-    def _watch_process(self):
+    def _watch_process(self, proc: subprocess.Popen):
         """프로세스 예기치 않은 종료 감시"""
-        if self.process:
-            self.process.wait()
-            with self._lock:
-                if self.running:
-                    self.running = False
-                    self._update_icon()
-                    self._notify("RunPod Monitor", "Bot이 예기치 않게 종료되었습니다.")
+        proc.wait()
+        with self._lock:
+            # 재시작으로 프로세스가 교체된 경우 무시
+            if self.process is not proc:
+                return
+            if self.running:
+                self.running = False
+                self._update_icon()
+                self._notify("RunPod Monitor", "Bot이 예기치 않게 종료되었습니다.")
 
     def _update_icon(self):
         if self.icon:
@@ -351,8 +360,9 @@ class TrayApp:
         if self.icon:
             try:
                 self.icon.notify(message, title)
-            except Exception:
-                pass
+            except Exception as e:
+                # 알림 실패는 치명적이지 않으므로 무시하되 디버깅을 위해 로깅
+                print(f"알림 실패: {e}")
 
     # ── 트레이 메뉴 콜백 ──
 
@@ -424,14 +434,22 @@ class TrayApp:
 
 
 def main():
-    try:
-        import dotenv  # noqa: F401
-    except ImportError:
+    missing = []
+    for mod in ("dotenv", "pystray", "PIL"):
+        try:
+            importlib.import_module(mod)
+        except ImportError:
+            missing.append(mod)
+    if missing:
         print("의존성을 설치합니다...")
         subprocess.check_call(
             [PYTHON_EXE, "-m", "pip", "install", "-r",
              os.path.join(BASE_DIR, "requirements.txt")],
         )
+
+    global pystray, Image, ImageDraw, ImageFont
+    import pystray  # noqa: F811
+    from PIL import Image, ImageDraw, ImageFont  # noqa: F811
 
     app = TrayApp()
     app.run()
