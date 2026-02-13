@@ -299,8 +299,9 @@ class TrayApp:
             self._update_icon()
 
         # 파이프 → UTF-8 로그 파일 변환 스레드
-        threading.Thread(target=self._pipe_to_log, daemon=True).start()
-        threading.Thread(target=self._watch_process, args=(self.process,), daemon=True).start()
+        proc = self.process
+        threading.Thread(target=self._pipe_to_log, args=(proc,), daemon=True).start()
+        threading.Thread(target=self._watch_process, args=(proc,), daemon=True).start()
 
     def _pipe_to_log(self, proc: subprocess.Popen):
         """서브프로세스 stdout(바이트)을 읽어서 UTF-8로 로그 파일에 기록"""
